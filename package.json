@@ -1,0 +1,26 @@
+{
+  "name": "kpi-appraisal-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "description": "KPI appraisal workspace with AI-assisted achievement refinement and Excel export.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --check lib/kpi.js && node --check public/app.js && node --check public/store.js && node --check public/components.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "mongodb": "^6.17.0",
+    "multer": "^2.0.2",
+    "openai": "^6.42.0",
+    "redux": "^5.0.1",
+    "undici": "^6.21.3"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}

@@ -28,19 +28,21 @@ The Docker setup runs the application and MongoDB together:
 docker compose up --build -d
 ```
 
-Open `http://localhost:3010`. MongoDB data is retained in the named
-`mongo_data` volume.
+Open `http://localhost:3010`. MongoDB data is retained on the host in
+`./data/db`, so stopping or recreating the containers does not erase KPI data.
 
 Useful commands:
 
 ```powershell
 docker compose logs -f app
+docker compose stop
+docker compose start
 docker compose down
-docker compose down -v
 ```
 
-The last command also deletes the MongoDB volume and should only be used when
-you intentionally want to erase all KPI data.
+Use `docker compose stop` when you only want to stop the app. `docker compose down`
+removes containers and the network, but it leaves `./data/db` in place. Delete
+`./data/db` only when you intentionally want to erase all KPI data.
 
 ## MongoDB
 
@@ -62,6 +64,43 @@ browser data is migrated automatically when the collection is empty.
 
 Changes are autosaved to MongoDB about 600 milliseconds after the latest edit.
 The sidebar shows the current save state.
+
+## Authentication and licensing
+
+The app creates an initial administrator on first startup:
+
+```text
+username: admin
+password: admin
+```
+
+Change that password after first sign-in. New self-registered users are created
+as editors; administrators can be managed through the API.
+
+Licensing uses the same signed key pattern as the Weekwise app. Add these values
+to `.env`:
+
+```text
+JWT_SECRET=replace-with-a-long-random-jwt-secret
+LICENSE_PUBLIC_KEY=base64_encoded_public_key_pem_from_licence_generator
+```
+
+`LICENSE_PUBLIC_KEY` should be the base64-encoded PEM public key from the
+licensing app. Users can sign in even when no active licence exists. In that
+state the header warns admins to activate the licence in **Settings** and tells
+non-admin users to contact the system admin. Workspace viewing remains
+available, but transactions such as autosave, import/export, AI refinement, and
+workspace settings changes require an active licence.
+
+Administrators can use **Settings** to:
+
+- Activate or renew the signed licence key.
+- Upload or remove the workspace logo.
+- Update workspace display settings.
+- Manage user roles and reset user passwords.
+
+Backend authentication, licensing, settings, database, and KPI domain modules
+live under `backend/lib`.
 
 ## Master KPIs
 
@@ -90,6 +129,13 @@ Authenticated proxies may use a URL such as
 `http://username:password@proxy.company.com:8080`. Keep `.env` private. If the
 proxy performs TLS inspection, your IT team may also require
 `NODE_EXTRA_CA_CERTS` to point to the corporate CA certificate.
+
+## API billing
+
+AI refinement uses the OpenAI API from the local server. A ChatGPT Plus
+subscription does not include API quota for this app. If refinement reports
+that quota is unavailable, add credits or raise the budget for the API project
+that owns `OPENAI_API_KEY`, then restart the app.
 
 ## Workbook support
 

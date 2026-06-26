@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildRefinementPrompt, normalizeImportedRows } from "../lib/kpi.js";
+import { buildRefinementPrompt, normalizeImportedRows } from "../backend/lib/kpi.js";
 
 test("prompt preserves supplied KPI context and anti-fabrication rule", () => {
   const prompt = buildRefinementPrompt({

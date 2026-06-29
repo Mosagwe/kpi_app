@@ -1,48 +1,30 @@
-import crypto from "node:crypto";
+import { licenseValidator } from "../src/license-validator.js";
 
 const licenseCollectionName = "licenses";
-const appName = "KPI Appraisal Assistant";
-
-function configuredPublicKey() {
-  const raw = process.env.LICENSE_PUBLIC_KEY?.trim();
-  if (!raw) return "";
-  try {
-    return Buffer.from(raw, "base64").toString("utf8");
-  } catch {
-    return "";
-  }
-}
 
 export function readLicenseKey(licenseKey) {
-  const publicKey = configuredPublicKey();
-  if (!publicKey) return { error: "LICENSE_PUBLIC_KEY is not configured on the server." };
-
-  const [payload, signature, ...extra] = String(licenseKey || "").trim().split(".");
-  if (!payload || !signature || extra.length) return { error: `This licence key is invalid or was not issued for ${appName}.` };
-
-  try {
-    const valid = crypto.verify(null, Buffer.from(payload), publicKey, Buffer.from(signature, "base64url"));
-    if (!valid) return { error: `This licence key is invalid or was not issued for ${appName}.` };
-    const license = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (license?.version !== 1 || typeof license.expiresAt !== "string") {
-      return { error: `This licence key is invalid or was not issued for ${appName}.` };
-    }
-    return { license };
-  } catch {
-    return { error: `This licence key is invalid or was not issued for ${appName}.` };
-  }
+  const result = licenseValidator.validateKey(licenseKey);
+  if (!result.ok) return result;
+  return result;
 }
 
 export async function licenseStatus(db) {
-  const license = await db.collection(licenseCollectionName).findOne(
+  const saved = await db.collection(licenseCollectionName).findOne(
     { key: "workspace" },
     { projection: { _id: 0, licenseKey: 0 } }
   );
-  if (!license) return { status: "inactive", active: false };
-  const active = license.status === "active"
-    && Number.isFinite(Date.parse(license.expiresAt))
-    && new Date(license.expiresAt) > new Date();
-  return { ...license, status: active ? "active" : "expired", active };
+  if (!saved?.license) return { status: "inactive", active: false };
+
+  const result = licenseValidator.validateLicense(saved.license);
+  const active = result.ok;
+  return normalizeLicenseStatus({
+    ...saved,
+    license: result.ok ? result.license : saved.license,
+    status: active ? "active" : result.code === "license_expired" ? "expired" : "inactive",
+    active,
+    code: result.ok ? undefined : result.code,
+    error: result.ok ? undefined : result.error
+  });
 }
 
 export async function activateLicense(db, licenseKey, user) {
@@ -50,18 +32,11 @@ export async function activateLicense(db, licenseKey, user) {
   if (result.error) return result;
 
   const license = result.license;
-  if (!Number.isFinite(Date.parse(license.expiresAt)) || new Date(license.expiresAt) <= new Date()) {
-    return { error: "This licence key has already expired. Request a new key." };
-  }
-
   const saved = {
     key: "workspace",
-    licenseKey,
     status: "active",
-    organization: cleanText(license.organization) || "Unassigned workspace",
-    plan: cleanText(license.plan) || "Standard",
-    issuedAt: license.issuedAt || null,
-    expiresAt: license.expiresAt,
+    license,
+    licenseKeyHash: result.licenseKeyHash,
     activatedAt: new Date(),
     activatedBy: user.username,
     updatedAt: new Date()
@@ -87,4 +62,33 @@ export function requireActiveLicense(db) {
 
 function cleanText(value) {
   return typeof value === "string" ? value.trim().slice(0, 160) : "";
+}
+
+function normalizeLicenseStatus(saved) {
+  const license = saved.license || {};
+  return {
+    key: saved.key,
+    active: Boolean(saved.active),
+    status: saved.status || "inactive",
+    code: saved.code,
+    error: saved.error,
+    licenseId: cleanText(license.licenseId),
+    organization: cleanText(license.organization) || "Unassigned workspace",
+    organizationId: cleanText(license.organizationId),
+    solutionId: cleanText(license.solutionId),
+    solutionName: cleanText(license.solutionName),
+    productCode: cleanText(license.productCode),
+    appId: cleanText(license.appId),
+    environment: cleanText(license.environment),
+    audience: cleanText(license.audience),
+    plan: cleanText(license.plan) || "Standard",
+    features: Array.isArray(license.features) ? license.features : [],
+    limits: license.limits && typeof license.limits === "object" ? license.limits : {},
+    issuedAt: license.issuedAt || null,
+    startsAt: license.startsAt || null,
+    expiresAt: license.expiresAt || null,
+    activatedAt: saved.activatedAt,
+    activatedBy: saved.activatedBy,
+    updatedAt: saved.updatedAt
+  };
 }

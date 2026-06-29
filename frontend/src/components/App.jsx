@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+
+import { activateLicense, getLicenseStatus } from "../api/license-api.js";
+
 import {
-  activateLicense,
+  // activateLicense,
   changePassword,
   createUser,
   deleteUser,
@@ -9,18 +12,23 @@ import {
   exportMasterWorkbook,
   getConfig,
   getCurrentUser,
-  getLicense,
+  getAuthToken,
+  getAuthUserFromToken,
+  getCachedAuthUser,
+  // getLicense,
   getSettings,
   getUsers,
   getWorkspace,
   importWorkbook,
   login,
+  logoutSession,
   register,
   refineAchievement,
   resetUserPassword,
   saveLogo,
   saveSettings,
   saveWorkspace,
+  setCachedAuthUser,
   setAuthToken,
   updateUserRole,
   updateUserActive,
@@ -96,18 +104,42 @@ export function App() {
         }
       }
 
-      try {
-        const { user } = await getCurrentUser();
-        if (cancelled) return;
-        setAuthState({ checked: true, user });
-        const [nextLicense, nextSettings] = await Promise.all([getLicense(), getSettings()]);
-        if (cancelled) return;
-        setLicense(nextLicense);
-        setSettings(nextSettings || { name: "KPI Appraisal Assistant", logoMode: "default" });
-        await hydrateWorkspace(nextLicense);
-      } catch (error) {
-        if (!cancelled) setAuthState({ checked: true, user: null });
+      let user;
+      const restoredUser = getCachedAuthUser() || getAuthUserFromToken();
+      if (getAuthToken() && restoredUser && !cancelled) {
+        setAuthState({ checked: true, user: restoredUser });
       }
+      try {
+        ({ user } = await getCurrentUser());
+      } catch (error) {
+        if (!cancelled && error.status === 401) {
+          setAuthToken("");
+          setCachedAuthUser(null);
+          setAuthState({ checked: true, user: null });
+        } else if (!cancelled && !restoredUser) {
+          setAuthState({ checked: true, user: null });
+        } else if (!cancelled) {
+          dispatch(uiActions.showToast({ message: error.message || "Session restored, but authentication could not be verified.", error: true }));
+        }
+        return;
+      }
+      if (cancelled) return;
+      setCachedAuthUser(user);
+      setAuthState({ checked: true, user });
+
+      let nextLicense = { active: false, status: "inactive" };
+      let nextSettings = { name: "KPI Appraisal Assistant", logoMode: "default" };
+      try {
+        [nextLicense, nextSettings] = await Promise.all([getLicenseStatus(), getSettings()]);
+      } catch (error) {
+        if (!cancelled) {
+          dispatch(uiActions.showToast({ message: error.message || "Session restored, but startup data could not be loaded.", error: true }));
+        }
+      }
+      if (cancelled) return;
+      setLicense(nextLicense);
+      setSettings(nextSettings || { name: "KPI Appraisal Assistant", logoMode: "default" });
+      await hydrateWorkspace(nextLicense);
     }
     boot();
     return () => { cancelled = true; };
@@ -134,7 +166,8 @@ export function App() {
     if (action === "register") return register(payload);
     const data = await login(payload);
     setAuthState({ checked: true, user: data.user });
-    const [nextLicense, nextSettings] = await Promise.all([getLicense(), getSettings()]);
+    setCachedAuthUser(data.user);
+    const [nextLicense, nextSettings] = await Promise.all([getLicenseStatus(), getSettings()]);
     setLicense(nextLicense);
     setSettings(nextSettings || { name: "KPI Appraisal Assistant", logoMode: "default" });
     hydrated.current = false;
@@ -148,7 +181,9 @@ export function App() {
   }
 
   function logout() {
+    logoutSession().catch(() => {});
     setAuthToken("");
+    setCachedAuthUser(null);
     setAuthState({ checked: true, user: null });
     setLicense(null);
     hydrated.current = false;
@@ -758,6 +793,7 @@ function MasterView() {
   const workspace = useSelector(selectWorkspace);
   const master = useSelector(selectSelectedMaster);
   const fileRef = useRef();
+  const [addingYear, setAddingYear] = useState(false);
   async function upload(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -771,12 +807,7 @@ function MasterView() {
       event.target.value = "";
     }
   }
-  function addYear() {
-    const year = Number(window.prompt("Master KPI year", new Date().getFullYear()));
-    if (!Number.isInteger(year) || year < 2020 || year > 2100) {
-      dispatch(uiActions.showToast({ message: "Enter a valid year between 2020 and 2100.", error: true }));
-      return;
-    }
+  function addYear(year) {
     dispatch(workspaceActions.addMasterYear(year));
     dispatch(uiActions.showToast({ message: "Record added successfully." }));
   }
@@ -811,7 +842,7 @@ function MasterView() {
           )}
         </div>
         <div className="master-year-actions">
-          <button className="button ghost" onClick={addYear}>+ Add year</button>
+          <button className="button ghost" onClick={() => setAddingYear(true)}>+ Add year</button>
           <button className="button danger" disabled={!years.length} onClick={archiveSelectedYear}>Archive year</button>
         </div>
       </section>
@@ -853,7 +884,50 @@ function MasterView() {
           <div className="empty-state"><h3>No active master KPI years</h3><p>Add a new year or activate an archived master template.</p></div>
         </section>
       )}
+      {addingYear && (
+        <MasterYearDialog
+          workspace={workspace}
+          onCreate={addYear}
+          onClose={() => setAddingYear(false)}
+        />
+      )}
     </section>
+  );
+}
+
+function MasterYearDialog({ workspace, onCreate, onClose }) {
+  const defaultYear = workspace.selectedMasterYear || new Date().getFullYear();
+  const [year, setYear] = useState(defaultYear);
+  const [error, setError] = useState("");
+
+  function submit(event) {
+    event.preventDefault();
+    const nextYear = Number(year);
+    if (!Number.isInteger(nextYear) || nextYear < 2020 || nextYear > 2100) {
+      return setError("Enter a valid year between 2020 and 2100.");
+    }
+    if (workspace.mastersByYear[String(nextYear)]) {
+      return setError(`${nextYear} is already an active master KPI year.`);
+    }
+    if (workspace.archivedMastersByYear?.[String(nextYear)]) {
+      return setError(`${nextYear} is archived. Activate it from the Archived view to keep its KPI template.`);
+    }
+    onCreate(nextYear);
+    onClose();
+  }
+
+  return (
+    <Modal className="quarter-modal" onClose={onClose}>
+      <form method="dialog" className="modal-card" onSubmit={submit} noValidate>
+        <DialogTitle eyebrow="MASTER TEMPLATE" title="Add master KPI year" onClose={onClose} />
+        <p className="modal-context">Create a year container for the approved master KPI template.</p>
+        <div className="edit-grid">
+          <label>Master KPI year<input type="number" min="2020" max="2100" required value={year} onChange={(event) => { setError(""); setYear(event.target.value); }} /></label>
+        </div>
+        {error && <span className="form-error" role="alert">{error}</span>}
+        <div className="modal-actions"><button className="button ghost" type="button" onClick={onClose}>Cancel</button><button className="button primary" type="submit">Add year</button></div>
+      </form>
+    </Modal>
   );
 }
 

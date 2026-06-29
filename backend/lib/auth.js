@@ -4,6 +4,8 @@ import { ObjectId } from "mongodb";
 
 const usersCollectionName = "users";
 const jwtSecret = process.env.JWT_SECRET || "kpi-development-secret-change-me";
+const authCookieName = "kpi_auth_token";
+const authTokenMaxAgeMs = 8 * 60 * 60 * 1000;
 
 export function cleanUsername(value) {
   return typeof value === "string"
@@ -31,6 +33,26 @@ export function signToken(user) {
     jwtSecret,
     { expiresIn: "8h" }
   );
+}
+
+function setAuthCookie(req, res, token) {
+  res.cookie(authCookieName, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: req.secure,
+    maxAge: authTokenMaxAgeMs,
+    path: "/"
+  });
+}
+
+function clearAuthCookie(res) {
+  res.clearCookie(authCookieName, { path: "/" });
+}
+
+function cookieValue(req, name) {
+  const cookies = String(req.headers.cookie || "").split("; ");
+  const match = cookies.find((cookie) => cookie.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : "";
 }
 
 export async function initializeAuth(db) {
@@ -109,10 +131,16 @@ export function authRoutes(db) {
           return res.status(401).json({ error: "Invalid username or password." });
         }
         if (user.active === false) return res.status(403).json({ error: "This user account is deactivated. Contact the system admin." });
-        res.json({ token: signToken(user), user: publicUser(user) });
+        const token = signToken(user);
+        setAuthCookie(req, res, token);
+        res.json({ token, user: publicUser(user) });
       } catch (error) {
         next(error);
       }
+    },
+    logout: (_req, res) => {
+      clearAuthCookie(res);
+      res.json({ message: "Signed out successfully." });
     },
     me: (req, res) => res.json(publicUser(req.user)),
     profile: async (req, res, next) => {
@@ -243,7 +271,7 @@ export function authRoutes(db) {
 export function requireAuth(db) {
   return async (req, res, next) => {
     try {
-      const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+      const token = req.headers.authorization?.replace(/^Bearer\s+/i, "") || cookieValue(req, authCookieName);
       if (!token) return res.status(401).json({ error: "Authentication is required." });
       const payload = jwt.verify(token, jwtSecret);
       const user = await db.collection(usersCollectionName).findOne({ _id: new ObjectId(payload.id), deletedAt: { $exists: false } });

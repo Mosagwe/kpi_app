@@ -10,6 +10,7 @@ OpenAI, tracking completion, and exporting appraisal-ready Excel workbooks.
 3. Run:
 
 ```powershell
+cd backend
 npm install
 npm start
 ```
@@ -19,6 +20,17 @@ npm start
 The API key stays on the server and is never sent to the browser. Draft KPI
 data is stored in MongoDB. Browser local storage is used only as an offline
 recovery cache.
+
+The frontend is managed separately:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Run `npm run build` in `frontend` before serving the production app from the
+backend.
 
 ## Docker
 
@@ -99,8 +111,17 @@ Administrators can use **Settings** to:
 - Update workspace display settings.
 - Manage user roles and reset user passwords.
 
-Backend authentication, licensing, settings, database, and KPI domain modules
-live under `backend/lib`.
+Backend code follows a clean-architecture layout under `backend/src`:
+
+- `domain` contains pure KPI rules and normalization.
+- `application` contains use cases for config, workspace, refinement, and workbook flows.
+- `infrastructure` contains adapters for MongoDB, OpenAI, environment config, and Excel files.
+- `interfaces/http` contains the Express app and route wiring.
+
+The legacy-compatible `backend/lib` modules remain for auth, licensing,
+settings, and existing imports while the backend continues to move inward.
+Frontend source, Vite config, public assets, and build output live under
+`frontend`.
 
 ## Master KPIs
 
